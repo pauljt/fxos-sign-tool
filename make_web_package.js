@@ -3,18 +3,15 @@ var walk = require('walk');
 var path = require('path');
 var buffer = require('buffer');
 var mime = require('mime');
+var crypto = require('crypto');
 
-//manifest is blacklisted since we prepend it at the end, after file hashes are calculated.
+//files you don't want to include in the package, but might exist in the working directory
 var fileBlacklist = [".DS_Store"];
 
-function token_generator(length) {
-  var chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  var result = '';
-  for (var i = length; i > 0; --i) result += chars[Math.round(Math.random() * (chars.length - 1))];
-  return "--"+result;
-}
+//will the package be signed?
+var signed = true;
 
-var token = token_generator(10);
+var token = createToken(10);
 
 if (process.argv.length <= 3) {
   console.log("usage: node make_web_package.js <app-folder> <package-name>");
@@ -32,10 +29,13 @@ var writeStream = fs.createWriteStream(packageFilename);
 var script_dir = process.cwd();
 process.chdir(packageRoot);
 
-if (!fs.existsSync('./manifest.webapp')) {
+if (!fs.existsSync('manifest.webapp')) {
   console.log('Can\'t find "./manifest.webapp, exiting."');
   process.exit(1)
 }
+
+var newManifest = JSON.parse(fs.readFileSync("manifest.webapp"));
+
 
 walker = walk.walk(".");
 
@@ -43,16 +43,19 @@ walker.on("file", function (root, fileStat, next) {
   fs.readFile(path.resolve(root, fileStat.name), function (err, buffer) {
     if (fileBlacklist.indexOf(fileStat.name) < 0) {
       var contentLocation = path.join(root, fileStat.name);
-      if(contentLocation!='manifest.webapp'){
+
+      //skip the manifest since we need to prepend it after we have calculated hashes
+      if (contentLocation != 'manifest.webapp') {
         console.log(`Adding ${contentLocation} (${buffer.length} bytes)...`);
-        writeStream.write(token+"\r\n");
-        writeStream.write("Content-Location: " + contentLocation + "\r\n");
-        var mimeType = mime.lookup(path.extname(contentLocation));
-        writeStream.write("Content-Type: " + mimeType + "\r\n");
-        writeStream.write("\r\n");
+        var header = createHeader(contentLocation);
+
+        writeStream.write(token + "\r\n");
+        writeStream.write(header);
         writeStream.write(buffer);
         writeStream.write("\r\n");
-        paths.push(contentLocation);
+
+        //create hash for manifest
+        paths.push({"src": contentLocation, "integrity": createHash(header, buffer)});
       }
     }
     next();
@@ -64,9 +67,58 @@ walker.on("errors", function (root, nodeStatsArray, next) {
 });
 
 walker.on("end", function () {
-  console.log('Package saved to:' + __dirname + "/" + packageFilename);
   console.log(JSON.stringify(paths));
-  writeStream.end();
+  writeStream.end(function(){
+    //prepend manifest & signature
+    process.chdir(script_dir);
+
+    var signature='';
+
+    if (signed) {
+      newManifest["moz-resources"] = paths;
+      signature = signManifest(newManifestChunk);
+    }
+
+    var newManifestChunk = createHeader("manifest.webapp") + JSON.stringify(newManifest, null, '  ')+"\r\n";
+    var prependBlock = new Buffer(signature +token + "\r\n" + newManifestChunk);
+
+
+    var data = fs.readFileSync(packageFilename);
+    console.log(prependBlock.toString()+data)
+    var fd = fs.openSync(packageFilename, 'w');
+    fs.writeSync(fd, prependBlock+data);
+    fs.close(fd);
+
+    console.log('Package saved to:' + __dirname + "/" + packageFilename);
+  });
+
 });
+
+function createToken(length) {
+  var chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  var result = '';
+  for (var i = length; i > 0; --i) result += chars[Math.round(Math.random() * (chars.length - 1))];
+  return "--" + result;
+}
+
+
+function createHeader(contentLocation) {
+  var mimeType = mime.lookup(path.extname(contentLocation));
+  return `Content-Location: ${contentLocation}\r\n` +
+    `Content-Type: ${mimeType}\r\n` +
+    `\r\n`;
+}
+
+
+function createHash(header, buffer) {
+  var shasum = crypto.createHash('sha256');
+  shasum.update(header);
+  shasum.update(buffer);
+  return shasum.digest('base64');
+}
+
+function signManifest(manifest) {
+  return "SIGNATURE\r\n";
+}
 
 
