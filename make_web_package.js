@@ -68,25 +68,21 @@ walker.on("errors", function (root, nodeStatsArray, next) {
 
 walker.on("end", function () {
   console.log(JSON.stringify(paths));
-  writeStream.end(function(){
+  writeStream.end(function () {
     //prepend manifest & signature
     process.chdir(script_dir);
 
-    var signature='';
 
-    if (signed) {
-      newManifest["moz-resources"] = paths;
-      signature = signManifest(newManifestChunk);
-    }
-
-    var newManifestChunk = createHeader("manifest.webapp") + JSON.stringify(newManifest, null, '  ')+"\r\n";
-    var prependBlock = new Buffer(signature +token + "\r\n" + newManifestChunk);
+    newManifest["moz-resources"] = paths;
+    var newManifestChunk = createHeader("manifest.webapp") + JSON.stringify(newManifest, null, '  ') + "\r\n";
+    var signature = signManifest(newManifestChunk);
+    var prependBlock = new Buffer(signature + token + "\r\n" + newManifestChunk);
 
 
     var data = fs.readFileSync(packageFilename);
-    console.log(prependBlock.toString()+data)
+    console.log(prependBlock.toString() + data)
     var fd = fs.openSync(packageFilename, 'w');
-    fs.writeSync(fd, prependBlock+data);
+    fs.writeSync(fd, prependBlock + data);
     fs.close(fd);
 
     console.log('Package saved to:' + __dirname + "/" + packageFilename);
@@ -118,7 +114,31 @@ function createHash(header, buffer) {
 }
 
 function signManifest(manifest) {
-  return "SIGNATURE\r\n";
+  var signingKey = fs.readFileSync('trusted_ca1.der');
+  signingKey = derToPem(signingKey);
+
+  //debug key
+  fs.writeFileSync('out.pem', signingKey);
+
+  var shasum = crypto.createHash('sha1')
+    .update(manifest)
+    .digest('base64');
+
+  console.log(shasum)
+
+  var signature = crypto.createSign('RSA-SHA256')
+    .update(shasum)
+
+  //TODO - this fails because Error: error:0906D06C:PEM routines:PEM_read_bio:no start line
+  //.sign(signingKey, 'base64')
+  //return signature + "\r\n";
+
+  return "SIGNATURE GOES HERE!\r\n"
 }
 
 
+function derToPem(der) {
+  var body=der.toString('base64').match(/.{1,64}/g).join("\n");
+  return "-----BEGIN CERTIFICATE-----\n" +body+
+    "\n-----END CERTIFICATE-----\n"
+}
