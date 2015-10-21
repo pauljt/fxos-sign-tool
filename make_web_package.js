@@ -74,18 +74,19 @@ walker.on("errors", function (root, nodeStatsArray, next) {
 
 walker.on("end", function () {
   writeStream.end(function () {
-    //prepend manifest & signature
+    //go back to script dir first
     process.chdir(script_dir);
-
+    //generate signed manifest, including file hashes
     newManifest["moz-resources"] = paths;
     var newManifestChunk = createHeader("manifest.webapp") + JSON.stringify(newManifest, null, '  ') + "\r\n";
     var signature = signManifest(newManifestChunk);
     var prependBlock = new Buffer(signature + token + "\r\n" + newManifestChunk);
 
+    //prepend manifest & signature
 
     var data = fs.readFileSync(packageFilename);
     var fd = fs.openSync(packageFilename, 'w');
-    fs.writeSync(fd, prependBlock + data);
+    fs.writeSync(fd, prependBlock + data + token);
     fs.close(fd);
 
     console.log('Package saved to:' + __dirname + "/" + packageFilename);
@@ -131,7 +132,15 @@ function signManifest(manifest) {
 
 //Loads a privatekey from
 function createOrLoadSigningKey() {
-  var pki=forge.pki;
+  //if there is a signing key in the directory already, use it
+  if (fs.existsSync(SIGNINGKEY) || fs.existsSync(DEVELOPERCERT)) {
+    console.log(`Signging with existing ${SIGNINGKEY} file`)
+    var privateKeyPem = fs.readFileSync(SIGNINGKEY);
+    return privateKeyPem;
+  }
+
+  console.log('No signing key found, generating new key and certificate');
+  var pki = forge.pki;
   var keys = pki.rsa.generateKeyPair({bits: 512, e: 0x10001});
   var cert = forge.pki.createCertificate();
   cert.publicKey = keys.publicKey;
@@ -199,9 +208,9 @@ function createOrLoadSigningKey() {
     name: 'subjectKeyIdentifier'
   }]);
 
-  cert.sign(keys.privateKey,forge.md.sha256.create());
+  cert.sign(keys.privateKey, forge.md.sha256.create());
 
-  var asn1=pki.certificateToAsn1(cert);
+  var asn1 = pki.certificateToAsn1(cert);
   var der = forge.asn1.toDer(asn1);
   fs.writeFileSync(DEVELOPERCERT, der.getBytes(), {encoding: 'binary'});
 
