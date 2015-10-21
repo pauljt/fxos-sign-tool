@@ -4,12 +4,17 @@ var path = require('path');
 var buffer = require('buffer');
 var mime = require('mime');
 var crypto = require('crypto');
+var forge = require('node-forge')
+
+const SIGNINGKEY = 'privatekey.pem';
+const DEVELOPERCERT = 'developercert.pem'
 
 //files you don't want to include in the package, but might exist in the working directory
 var fileBlacklist = [".DS_Store"];
 
 //will the package be signed?
 var signed = true;
+
 
 var token = createToken(10);
 
@@ -80,7 +85,6 @@ walker.on("end", function () {
 
 
     var data = fs.readFileSync(packageFilename);
-    console.log(prependBlock.toString() + data)
     var fd = fs.openSync(packageFilename, 'w');
     fs.writeSync(fd, prependBlock + data);
     fs.close(fd);
@@ -114,31 +118,91 @@ function createHash(header, buffer) {
 }
 
 function signManifest(manifest) {
-  var signingKey = fs.readFileSync('trusted_ca1.der');
-  signingKey = derToPem(signingKey);
-
-  //debug key
-  fs.writeFileSync('out.pem', signingKey);
+  var privateKey = createOrLoadSigningKey();
 
   var shasum = crypto.createHash('sha1')
     .update(manifest)
     .digest('base64');
 
-  console.log(shasum)
-
   var signature = crypto.createSign('RSA-SHA256')
     .update(shasum)
-
-  //TODO - this fails because Error: error:0906D06C:PEM routines:PEM_read_bio:no start line
-  //.sign(signingKey, 'base64')
-  //return signature + "\r\n";
-
-  return "SIGNATURE GOES HERE!\r\n"
+    .sign(privateKey, 'base64');
+  return `manifest-signature: ${signature}\n`;
 }
 
+//Loads a privatekey from
+function createOrLoadSigningKey() {
+  var keypair = forge.pki.rsa.generateKeyPair({bits: 2048, e: 0x10001});
 
-function derToPem(der) {
-  var body=der.toString('base64').match(/.{1,64}/g).join("\n");
-  return "-----BEGIN CERTIFICATE-----\n" +body+
-    "\n-----END CERTIFICATE-----\n"
+  var privateKey = forge.pki.privateKeyToPem(keypair.privateKey);
+  fs.writeFileSync(SIGNINGKEY, privateKey);
+
+  var cert = forge.pki.createCertificate();
+  cert.publicKey = keypair.publicKey;
+  cert.sign(keypair.privateKey);
+  cert.serialNumber = '01';
+  cert.validity.notBefore = new Date();
+  cert.validity.notAfter = new Date();
+  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+  var attrs = [{
+    name: 'commonName',
+    value: 'example.org'
+  }, {
+    name: 'countryName',
+    value: 'US'
+  }, {
+    shortName: 'ST',
+    value: 'Virginia'
+  }, {
+    name: 'localityName',
+    value: 'Blacksburg'
+  }, {
+    name: 'organizationName',
+    value: 'Test'
+  }, {
+    shortName: 'OU',
+    value: 'Test'
+  }];
+  cert.setSubject(attrs);
+  cert.setIssuer(attrs);
+  cert.setExtensions([{
+    name: 'basicConstraints',
+    cA: true
+  }, {
+    name: 'keyUsage',
+    keyCertSign: true,
+    digitalSignature: true,
+    nonRepudiation: true,
+    keyEncipherment: true,
+    dataEncipherment: true
+  }, {
+    name: 'extKeyUsage',
+    serverAuth: true,
+    clientAuth: true,
+    codeSigning: true,
+    emailProtection: true,
+    timeStamping: true
+  }, {
+    name: 'nsCertType',
+    client: true,
+    server: true,
+    email: true,
+    objsign: true,
+    sslCA: true,
+    emailCA: true,
+    objCA: true
+  }, {
+    name: 'subjectAltName',
+    altNames: [{
+      type: 6, // URI
+      value: 'http://example.org/webid#me'
+    }, {
+      type: 7, // IP
+      ip: '127.0.0.1'
+    }]
+  }, {
+    name: 'subjectKeyIdentifier'
+  }]);
+  fs.writeFileSync(DEVELOPERCERT, forge.pki.certificateToPem(cert));
+  return privateKey;
 }
