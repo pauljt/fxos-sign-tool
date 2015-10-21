@@ -7,7 +7,7 @@ var crypto = require('crypto');
 var forge = require('node-forge')
 
 const SIGNINGKEY = 'privatekey.pem';
-const DEVELOPERCERT = 'developercert.pem'
+const DEVELOPERCERT = 'developercert.der'
 
 //files you don't want to include in the package, but might exist in the working directory
 var fileBlacklist = [".DS_Store"];
@@ -20,6 +20,7 @@ var token = createToken(10);
 
 if (process.argv.length <= 3) {
   console.log("usage: node make_web_package.js <app-folder> <package-name>");
+  console.log("To test, run: node make_web_package.js test/myapp test.pak");
   process.exit(1);
 }
 
@@ -72,11 +73,9 @@ walker.on("errors", function (root, nodeStatsArray, next) {
 });
 
 walker.on("end", function () {
-  console.log(JSON.stringify(paths));
   writeStream.end(function () {
     //prepend manifest & signature
     process.chdir(script_dir);
-
 
     newManifest["moz-resources"] = paths;
     var newManifestChunk = createHeader("manifest.webapp") + JSON.stringify(newManifest, null, '  ') + "\r\n";
@@ -132,14 +131,10 @@ function signManifest(manifest) {
 
 //Loads a privatekey from
 function createOrLoadSigningKey() {
-  var keypair = forge.pki.rsa.generateKeyPair({bits: 2048, e: 0x10001});
-
-  var privateKey = forge.pki.privateKeyToPem(keypair.privateKey);
-  fs.writeFileSync(SIGNINGKEY, privateKey);
-
+  var pki=forge.pki;
+  var keys = pki.rsa.generateKeyPair({bits: 512, e: 0x10001});
   var cert = forge.pki.createCertificate();
-  cert.publicKey = keypair.publicKey;
-  cert.sign(keypair.privateKey);
+  cert.publicKey = keys.publicKey;
   cert.serialNumber = '01';
   cert.validity.notBefore = new Date();
   cert.validity.notAfter = new Date();
@@ -203,6 +198,16 @@ function createOrLoadSigningKey() {
   }, {
     name: 'subjectKeyIdentifier'
   }]);
-  fs.writeFileSync(DEVELOPERCERT, forge.pki.certificateToPem(cert));
-  return privateKey;
+
+  cert.sign(keys.privateKey,forge.md.sha256.create());
+
+  var asn1=pki.certificateToAsn1(cert);
+  var der = forge.asn1.toDer(asn1);
+  fs.writeFileSync(DEVELOPERCERT, der.getBytes(), {encoding: 'binary'});
+
+  //write out private key
+  var privateKeyPem = pki.privateKeyToPem(keys.privateKey);
+  fs.writeFileSync(SIGNINGKEY, privateKeyPem);
+
+  return privateKeyPem;
 }
