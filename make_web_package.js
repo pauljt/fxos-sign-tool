@@ -119,14 +119,38 @@ function createHash(header, buffer) {
 
 function signManifest(manifest) {
   var privateKey = createOrLoadSigningKey();
+  var certASN=forge.asn1.fromDer(forge.util.createBuffer(fs.readFileSync(DEVELOPERCERT),'raw'));
+  var devcert=forge.pki.certificateFromAsn1(certASN);
 
   var shasum = crypto.createHash('sha1')
     .update(manifest)
     .digest('base64');
 
-  var signature = crypto.createSign('RSA-SHA256')
-    .update(shasum)
-    .sign(privateKey, 'base64');
+  var p7 = forge.pkcs7.createSignedData();
+  p7.content = forge.util.createBuffer(shasum, 'utf8');
+  p7.addSigner({
+    key: forge.pki.privateKeyFromPem(privateKey),
+    certificate: devcert,
+    digestAlgorithm: forge.pki.oids.sha256,
+    authenticatedAttributes: [{
+      type: forge.pki.oids.contentType,
+      value: forge.pki.oids.data
+    }, {
+      type: forge.pki.oids.messageDigest
+    }, {
+      type: forge.pki.oids.signingTime
+    }]
+  });
+  p7.sign();
+  var pem = forge.pkcs7.messageToPem(p7);
+
+  console.log(pem);
+  // strip of the pksc7 header and remove new lines to convert from pem to der
+  signature=pem.match(/-----BEGIN PKCS7-----([\s\S]*)-----END PKCS7-----/)[1];
+  console.log(1,signature);
+  signature=signature.replace(/\r\n/gi,'');
+  console.log(2,signature);
+
   return `manifest-signature: ${signature}\n`;
 }
 
@@ -138,6 +162,7 @@ function createOrLoadSigningKey() {
     var privateKeyPem = fs.readFileSync(SIGNINGKEY);
     return privateKeyPem;
   }
+
 
   console.log('No signing key found, generating new key and certificate');
   var pki = forge.pki;
