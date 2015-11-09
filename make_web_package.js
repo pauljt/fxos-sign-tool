@@ -119,19 +119,20 @@ function createHash(header, buffer) {
 
 function signManifest(manifest) {
   var privateKey = createOrLoadSigningKey();
-  var certASN=forge.asn1.fromDer(forge.util.createBuffer(fs.readFileSync(DEVELOPERCERT),'raw'));
-  var devcert=forge.pki.certificateFromAsn1(certASN);
+  var certASN = forge.asn1.fromDer(forge.util.createBuffer(fs.readFileSync(DEVELOPERCERT), 'raw'));
+  var devcert = forge.pki.certificateFromAsn1(certASN);
 
   var shasum = crypto.createHash('sha1')
     .update(manifest)
     .digest('base64');
+  console.log(shasum)
 
   var p7 = forge.pkcs7.createSignedData();
   p7.content = forge.util.createBuffer(shasum, 'utf8');
   p7.addSigner({
     key: forge.pki.privateKeyFromPem(privateKey),
     certificate: devcert,
-    digestAlgorithm: forge.pki.oids.sha256,
+    digestAlgorithm: forge.pki.oids.sha1,
     authenticatedAttributes: [{
       type: forge.pki.oids.contentType,
       value: forge.pki.oids.data
@@ -141,32 +142,49 @@ function signManifest(manifest) {
       type: forge.pki.oids.signingTime
     }]
   });
+  p7.addCertificate(devcert);
   p7.sign();
-  var pem = forge.pkcs7.messageToPem(p7);
 
-  console.log(pem);
-  // strip of the pksc7 header and remove new lines to convert from pem to der
-  signature=pem.match(/-----BEGIN PKCS7-----([\s\S]*)-----END PKCS7-----/)[1];
-  console.log(1,signature);
-  signature=signature.replace(/\r\n/gi,'');
-  console.log(2,signature);
+  //detach content
+  //p7.content=null;
+
+  var p7Asn1 = p7.toAsn1();
+  var p7Der= forge.asn1.toDer(p7Asn1);
+  fs.writeFileSync('badsig.sig',p7Der.getBytes(),{encoding: 'binary'});
+
+  var signature=forge.util.encode64(p7Der);
+
+  /*
+   var pem = forge.pkcs7.messageToPem(p7);
+
+
+   console.log(pem);
+   // strip of the pksc7 header and remove new lines to convert from pem to der
+   signature=pem.match(/-----BEGIN PKCS7-----([\s\S]*)-----END PKCS7-----/)[1];
+   console.log(1,signature);
+   signature=signature.replace(/\r\n/gi,'');
+   console.log(2,signature);*/
+
 
   return `manifest-signature: ${signature}\n`;
 }
 
 //Loads a privatekey from
 function createOrLoadSigningKey() {
+ /*
   //if there is a signing key in the directory already, use it
+
   if (fs.existsSync(SIGNINGKEY) || fs.existsSync(DEVELOPERCERT)) {
     console.log(`Signging with existing ${SIGNINGKEY} file`)
     var privateKeyPem = fs.readFileSync(SIGNINGKEY);
     return privateKeyPem;
   }
+  */
 
 
   console.log('No signing key found, generating new key and certificate');
   var pki = forge.pki;
-  var keys = pki.rsa.generateKeyPair({bits: 512, e: 0x10001});
+  var keys = pki.rsa.generateKeyPair({bits: 2048, e: 0x10001});
   var cert = forge.pki.createCertificate();
   cert.publicKey = keys.publicKey;
   cert.serialNumber = '01';
@@ -198,20 +216,13 @@ function createOrLoadSigningKey() {
     name: 'basicConstraints',
     cA: true
   }, {
+    name: 'extKeyUsage',
+    codeSigning: true
+  }, {
     name: 'keyUsage',
     keyCertSign: true,
-    digitalSignature: true,
-    nonRepudiation: true,
-    keyEncipherment: true,
-    dataEncipherment: true
-  }, {
-    name: 'extKeyUsage',
-    serverAuth: true,
-    clientAuth: true,
-    codeSigning: true,
-    emailProtection: true,
-    timeStamping: true
-  }, {
+    digitalSignature: true
+  },{
     name: 'nsCertType',
     client: true,
     server: true,
@@ -220,17 +231,6 @@ function createOrLoadSigningKey() {
     sslCA: true,
     emailCA: true,
     objCA: true
-  }, {
-    name: 'subjectAltName',
-    altNames: [{
-      type: 6, // URI
-      value: 'http://example.org/webid#me'
-    }, {
-      type: 7, // IP
-      ip: '127.0.0.1'
-    }]
-  }, {
-    name: 'subjectKeyIdentifier'
   }]);
 
   cert.sign(keys.privateKey, forge.md.sha256.create());
@@ -244,4 +244,21 @@ function createOrLoadSigningKey() {
   fs.writeFileSync(SIGNINGKEY, privateKeyPem);
 
   return privateKeyPem;
+}
+
+
+function createCAcert() {
+
+}
+
+function createSigningCert() {
+
+}
+
+
+function loadCertFromDer(filename) {
+  var derString = fs.readFileSync(filename);
+  var buffer = forge.util.createBuffer(derString, 'raw');
+  var asn1 = forge.asn1.fromDer(buffer);
+  return cert = forge.pki.certificateFromAsn1(asn1);
 }
